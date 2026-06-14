@@ -1,0 +1,6 @@
+*.faiss filter=lfs diff=lfs merge=lfs -text
+*.safetensors filter=lfs diff=lfs merge=lfs -text
+*.pt filter=lfs diff=lfs merge=lfs -text
+smart_plate_nutrition_model_finetuned/checkpoint-1100/tokenizer.json filter=lfs diff=lfs merge=lfs -text
+smart_plate_nutrition_model_finetuned/checkpoint-1146/tokenizer.json filter=lfs diff=lfs merge=lfs -text
+**/tokenizer.json filter=lfs diff=lfs merge=lfs -text
