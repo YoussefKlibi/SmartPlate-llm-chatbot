@@ -1,0 +1,6 @@
+/smart_plate_nutrition_model_finetuned/
+.vscode/
+.idea/
+__pycache__/
+*.pyc
+README.md
