@@ -5,7 +5,7 @@
 SmartPlate is an AI-powered chatbot specialized in nutrition and dietary advice.
 
 <p align="center">
-  <img src="Assets/Model_finetuned_Response.png" alt="SmartPlate Demo Screenshot" width="600">
+  <img src="![](https://raw.githubusercontent.com/YoussefKlibi/SmartPlate-llm-chatbot/feature/model-pipeline/Assets/Model_Response.png)" alt="SmartPlate Demo Screenshot" width="600">
 </p>
 
 Our chatbot is built on top of the **Qwen3-4B Base Model**, which originally performs only next-token prediction without prioritizing structured outputs or domain constraints.
@@ -24,7 +24,7 @@ The original Qwen3-4B model:
 - Behaves as a generic next-token predictor
 
 <p align="center">
-  <img src="Assets/Bae_Model_Response.png" alt="Base Model Response" width="600">
+  <img src="![](https://raw.githubusercontent.com/YoussefKlibi/SmartPlate-llm-chatbot/feature/model-pipeline/Assets/Bae_Model_Response.png)" alt="Base Model Response" width="600">
 </p>
 ---
 
