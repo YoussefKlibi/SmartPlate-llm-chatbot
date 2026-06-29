@@ -1,0 +1,13 @@
+fastapi
+uvicorn
+pydantic
+torch
+transformers
+peft
+bitsandbytes
+accelerate
+sentence-transformers
+faiss-cpu
+numpy
+langdetect
+tavily-python
