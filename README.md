@@ -98,6 +98,7 @@ The training pipeline relies entirely on the Hugging Face ecosystem:
 ```bash
 git clone https://github.com/YoussefKlibi/SmartPlate-llm-chatbot.git
 cd smartplate-llm-chatbot
+git switch feature/model-pipeline
 pip install -r requirements.txt
 ```
 
