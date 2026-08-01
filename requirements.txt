@@ -11,3 +11,4 @@ faiss-cpu
 numpy
 langdetect
 tavily-python
+groq
