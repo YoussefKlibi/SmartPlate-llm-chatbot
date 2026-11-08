@@ -1,74 +1,165 @@
-import warnings
+import os
+import pathlib
+
+# --- Correctif Windows : UnicodeDecodeError ---
+_orig_read_text = pathlib.Path.read_text
+def _patched_read_text(self, encoding=None, errors=None):
+    if encoding is None:
+        encoding = "utf-8"
+    return _orig_read_text(self, encoding=encoding, errors=errors)
+pathlib.Path.read_text = _patched_read_text
+
 import torch
+
+# --- Compatibilité anciennes versions de PyTorch ---
+if not hasattr(torch, "float8_e8m0fnu"):
+    setattr(torch, "float8_e8m0fnu", torch.float32)
+
 from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
-from peft import PeftModel
+from datasets import load_dataset
+from peft import LoraConfig, prepare_model_for_kbit_training
+from trl import SFTTrainer, SFTConfig
 
-warnings.filterwarnings("ignore", message=".*copying from a non-meta parameter.*")
 
 # ==============================================================================
-# Configuration
+# Chemins
 # ==============================================================================
-BASE_MODEL_ID = "Qwen/Qwen3-4B-Base"
-# Dossier de l'adapter téléchargé depuis Drive
-ADAPTER_PATH = "C:/Users/MSI/Desktop/Fine_Tunning/Model/smart_plate_nutrition_model_finetuned"
+dataset_path = "C:/Users/MSI/Desktop/Fine_Tunning/Data/smart_plate_nutrition_dataset_clean.jsonl"
+DOSSIER_SAUVEGARDE_MODELE = "C:/Users/MSI/Desktop/Fine_Tunning/Model/smart_plate_nutrition_model_finetuned"
+os.makedirs(DOSSIER_SAUVEGARDE_MODELE, exist_ok=True)
 
-# IMPORTANT : EXACTEMENT le même system prompt que dans le dataset d'entraînement
-# (en français, avec vouvoiement).
-SYSTEM_PROMPT = (
-    "Tu es l'assistant de 'Smart Plate Nutrition'. Ton rôle est de fournir des "
-    "informations nutritionnelles ultra-précises, scientifiques et personnalisées. "
-    "Tu dois impérativement t'exprimer avec une grande politesse, utiliser "
-    "rigoureusement le vouvoiement, commencer par une salutation chaleureuse et "
-    "terminer en encourageant l'utilisateur de manière bienveillante."
+# ==============================================================================
+# Modèle
+# ------------------------------------------------------------------------------
+# On part d'un vrai modèle de base. Il ne connaît pas (ou mal) les tokens ChatML
+# <|im_start|> / <|im_end|> : on entraîne donc explicitement leurs embeddings
+# (voir trainable_token_indices dans la config LoRA plus bas).
+# ==============================================================================
+model_id = "Qwen/Qwen3-4B-Base"
+
+# ==============================================================================
+# Tokenizer
+# ==============================================================================
+print("Chargement du tokenizer...")
+tokenizer = AutoTokenizer.from_pretrained(model_id)
+tokenizer.padding_side = "right"
+
+# IMPORTANT : pad doit être DIFFÉRENT de eos.
+# Sinon le collator met les labels des tokens de fin à -100 (masqués) et le
+# modèle n'apprend jamais à s'arrêter. Sur Instruct c'est déjà le cas ; sur Base
+# eos et pad valent tous les deux <|endoftext|>.
+tokenizer.eos_token = "<|im_end|>"
+tokenizer.pad_token = "<|endoftext|>"
+
+# Template ChatML SIMPLE. Le template Qwen3 d'origine insère "<think>\n\n</think>\n\n"
+# au début de chaque réponse : on ne le veut pas dans les données d'entraînement.
+tokenizer.chat_template = (
+    "{% for message in messages %}"
+    "{{ '<|im_start|>' + message['role'] + '\\n' + message['content'] + '<|im_end|>' + '\\n' }}"
+    "{% endfor %}"
+    "{% if add_generation_prompt %}{{ '<|im_start|>assistant\\n' }}{% endif %}"
 )
-QUESTION = "Comment perdre de la graisse sans perdre de muscle ?"
 
 # ==============================================================================
-# Chargement : 4-bit, comme à l'entraînement
-# (bf16 si GPU Ampere ou plus récent, sinon fp16 — cas de la T4)
+# Dataset : format prompt / completion
+# ------------------------------------------------------------------------------
+# Ainsi la loss ne porte QUE sur la réponse de l'assistant (plus sur le system
+# prompt ni sur les messages user), et le modèle n'apprend plus à inventer des
+# tours "user".
 # ==============================================================================
-use_bf16 = torch.cuda.get_device_capability()[0] >= 8
-compute_dtype = torch.bfloat16 if use_bf16 else torch.float16
+print(f"Chargement du dataset depuis : {dataset_path}")
+dataset = load_dataset("json", data_files=dataset_path, split="train")
 
+def to_prompt_completion(example):
+    msgs = example["messages"]
+    return {"prompt": msgs[:-1], "completion": msgs[-1:]}
+
+dataset = dataset.map(to_prompt_completion, remove_columns=dataset.column_names)
+
+# Vérification visuelle : regarde bien le texte final (system, user, assistant,
+# <|im_end|> en fin de réponse, pas de balises <think> inattendues).
+example_text = tokenizer.apply_chat_template(
+    dataset[0]["prompt"] + dataset[0]["completion"], tokenize=False
+)
+print("\n--- Exemple formaté ---")
+print(example_text)
+print("--- Fin de l'exemple ---\n")
+assert "<think>" not in example_text, "Le template ajoute encore un bloc <think>."
+assert example_text.rstrip("\n").endswith("<|im_end|>"), "L'exemple ne finit pas par <|im_end|>."
+
+# ==============================================================================
+# Modèle 4-bit (QLoRA)
+# ==============================================================================
 bnb_config = BitsAndBytesConfig(
     load_in_4bit=True,
     bnb_4bit_quant_type="nf4",
-    bnb_4bit_compute_dtype=compute_dtype,
+    bnb_4bit_compute_dtype=torch.bfloat16,
     bnb_4bit_use_double_quant=True,
 )
 
-tokenizer = AutoTokenizer.from_pretrained(ADAPTER_PATH)
-base_model = AutoModelForCausalLM.from_pretrained(
-    BASE_MODEL_ID, quantization_config=bnb_config, device_map="auto"
+print("Chargement du modèle en 4-bit...")
+model = AutoModelForCausalLM.from_pretrained(
+    model_id,
+    quantization_config=bnb_config,
+    device_map="auto",
 )
-model = PeftModel.from_pretrained(base_model, ADAPTER_PATH)
-model.eval()
+model.gradient_checkpointing_enable()
+model = prepare_model_for_kbit_training(model)
 
 # ==============================================================================
-# Prompt : IDENTIQUE au template d'entraînement (marqueurs en texte normal)
+# LoRA
 # ==============================================================================
-prompt = (
-    f"Système :\n{SYSTEM_PROMPT}\n\n"
-    f"Utilisateur :\n{QUESTION}\n\n"
-    "Assistant :\n"
+im_start_id = tokenizer.convert_tokens_to_ids("<|im_start|>")
+im_end_id = tokenizer.convert_tokens_to_ids("<|im_end|>")
+print(f"IDs ChatML : <|im_start|>={im_start_id}  <|im_end|>={im_end_id}")
+
+peft_config = LoraConfig(
+    r=16,
+    lora_alpha=32,
+    target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+    lora_dropout=0.05,
+    bias="none",
+    task_type="CAUSAL_LM",
+    # Entraîne UNIQUEMENT les lignes d'embedding de ces 2 tokens (très léger en VRAM).
+    # LoRA seul ne modifie pas les embeddings, donc sans ça ces tokens restent "bruts".
+    # Nécessite un PEFT récent : pip install -U peft
+    # Si ta version est trop ancienne ou si ça échoue, remplace par :
+    #   modules_to_save=["embed_tokens", "lm_head"]   (beaucoup plus gourmand en VRAM)
+    trainable_token_indices={"embed_tokens": [im_start_id, im_end_id]},
+)
+print("Configuration LoRA terminée.")
+
+# ==============================================================================
+# Config d'entraînement
+# ==============================================================================
+training_args = SFTConfig(
+    output_dir=DOSSIER_SAUVEGARDE_MODELE,
+    max_length=1024,                 # remplace l'ancien training_args.max_seq_length (ignoré)
+    completion_only_loss=True,       # loss uniquement sur la réponse de l'assistant
+    per_device_train_batch_size=1,
+    gradient_accumulation_steps=8,
+    learning_rate=2e-4,
+    logging_steps=10,
+    num_train_epochs=1,
+    optim="paged_adamw_8bit",
+    bf16=True,
+    save_strategy="steps",
+    save_steps=100,
+    save_total_limit=2,
+    report_to="none",
 )
 
-inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
-STOP = "\n\nUtilisateur :"   # sécurité : coupe si le modèle invente un nouveau tour
+trainer = SFTTrainer(
+    model=model,
+    train_dataset=dataset,
+    peft_config=peft_config,
+    processing_class=tokenizer,
+    args=training_args,
+)
 
-with torch.no_grad():
-    outputs = model.generate(
-        **inputs,
-        max_new_tokens=512,
-        temperature=0.3,
-        do_sample=True,
-        repetition_penalty=1.0,                  # 1.0 : pas de pénalité
-        eos_token_id=tokenizer.eos_token_id,     # <|endoftext|>
-        pad_token_id=tokenizer.eos_token_id,
-        stop_strings=[STOP],
-        tokenizer=tokenizer,
-    )
+print("\nDébut de l'entraînement...")
+trainer.train()
 
-generated_tokens = outputs[0][inputs.input_ids.shape[1]:]
-text = tokenizer.decode(generated_tokens, skip_special_tokens=True)
-print(text.split(STOP)[0].strip())
+print(f"\nEntraînement terminé ! Sauvegarde dans : {DOSSIER_SAUVEGARDE_MODELE}")
+trainer.model.save_pretrained(DOSSIER_SAUVEGARDE_MODELE)
+tokenizer.save_pretrained(DOSSIER_SAUVEGARDE_MODELE)
