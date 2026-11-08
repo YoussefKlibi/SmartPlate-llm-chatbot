@@ -64,7 +64,7 @@ We targeted both the attention and feed-forward modules to modify the behavior o
 
 
 ##  Key Features
-
+- - **Fine-Tuned Adapter:** Available on Hugging Face as [KlibiYoussef/smart-plate-nutrition-adapter](https://huggingface.co/KlibiYoussef/smart-plate-nutrition-adapter)
 - Fine-tuned LLM based on Qwen3-4B Base Model
 - Nutrition-specialized assistant
 - Structured response generation
@@ -86,12 +86,11 @@ The training pipeline relies entirely on the Hugging Face ecosystem:
 
 ### Current Limitations
 - **Model Capacity Constraints:** While the Qwen3-4B base model is exceptionally fast and efficient for local deployment, its smaller parameter count means it may struggle with highly complex, multi-step medical or clinical metabolic reasoning compared to larger architectures. The choice of the Qwen3-4B base model was solely motivated by its ability to be handled without problems by our local RTX 5060 hardware. 
-- **Numerical & Factual Hallucinations:** Like many compact LLMs, the model can occasionally hallucinate specific quantitative data, such as inventing inaccurate protein counts, macronutrient breakdowns, or arbitrary nutritional percentages. Since it operates on probabilistic token prediction, it lacks an inherent mathematical engine to accurately calculate or verify precise nutritional values.
+- **Numerical & Factual Hallucinations:** the model can occasionally hallucinate specific quantitative data, such as inventing inaccurate protein counts, macronutrient breakdowns, or arbitrary nutritional percentages. Since it operates on probabilistic token prediction, it lacks an inherent mathematical engine to accurately calculate or verify precise nutritional values.
 - **Adversarial Prompting (Jailbreaking):** Although negative sampling was integrated into the Supervised Fine-Tuning (SFT) dataset to reject out-of-domain queries (politics, weather ...), sophisticated prompt-injection techniques might still occasionally bypass the guardrails.
 
 ### Future Roadmap
-- **Dynamic RAG Integration:** Connect the FastAPI backend to an authoritative nutritional database API to grounding the model's responses with real-time, verified factual numbers and eliminate mathematical hallucinations on calorie counting.
-- **DPO/ORPO Alignment:** Implement Direct Preference Optimization (DPO) on top of the current SFT adapter to further harden the model against out-of-domain questions without hurting conversational fluidity.
+- **Dynamic RAG Integration:** Connect the FastAPI backend to an authoritative nutritional database API to ground the model's responses in real-time, verified nutritional data and reduce mathematical hallucinations in calorie calculations. Additionally, explore web-based RAG to enrich the model's responses with up-to-date information from reliable online sources.
 
 ##  Installation
 
@@ -101,8 +100,9 @@ cd smartplate-llm-chatbot
 git switch feature/model-pipeline
 pip install -r requirements.txt
 ```
-
+You can test our Lora Adapter in the code file `test/Lora_test.py` (after installing the libraries)
 ---
+
 
 ## Author
 This project was independently developed from scratch by **Klibi Youssef** to explore advanced LLM domain adaptation, and efficient QLoRA fine-tuning workflows.
